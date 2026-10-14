@@ -21,11 +21,11 @@ DEFAULTS = {
     'inference': {'managed': True, 'base_url': 'http://127.0.0.1:18080/v1',
         'host': '127.0.0.1', 'port': 18080, 'served_model_name': 'datarsi',
         'tensor_parallel_size': 2, 'max_model_len': 16384, 'gpu_memory_utilization': 0.6,
-        'startup_timeout': 600, 'request_timeout': 300, 'extra_args': [], 'api_key_env': 'DATARSI_MODEL_API_KEY'},
-    'agent': {'max_steps': 30, 'command_timeout': 120, 'max_observation_chars': 16000,
+        'tool_call_parser':'qwen3_coder','startup_timeout': 600, 'request_timeout': 300, 'extra_args': [], 'api_key_env': 'DATARSI_MODEL_API_KEY'},
+    'agent': {'backend':'opencode','opencode_binary':'/opt/opencode/bin/opencode','task_timeout':1800,'max_steps': 30, 'command_timeout': 120, 'max_observation_chars': 16000,
         'max_new_tokens': 2048, 'temperature': 0.2},
     'runtime': {'docker_host': 'unix:///var/run/docker.sock', 'pull_missing_images': False,
-        'network_disabled': True, 'memory_limit': '8g', 'cpus': 2},
+        'network_disabled': False, 'opencode_network_container':'datarsi-dev', 'memory_limit': '8g', 'cpus': 2},
     'experience': {'teacher_checkpoint': None, 'repair_max_steps': 30, 'replay_ratio': 0.5},
     'tracking': {'mode': 'offline', 'project': 'datarsi', 'entity': None, 'tags': [], 'log_manifests': True},
 }
@@ -117,6 +117,12 @@ def load_config(path, overrides=(), root=ROOT):
     for value in (values['experiment']['rounds'],values['training']['num_processes'],values['data']['max_length'],values['data']['max_train_examples'],values['agent']['max_steps']):
         if type(value) is not int or value < 1:
             raise ValueError('Round, process and budget counts must be positive integers')
+    if values['agent']['backend']!='opencode':
+        raise ValueError('agent.backend must be opencode')
+    if values['runtime']['network_disabled']:
+        raise ValueError('OpenCode requires the runner network namespace for local vLLM access')
+    if type(values['agent']['task_timeout']) is not int or values['agent']['task_timeout']<1:
+        raise ValueError('agent.task_timeout must be a positive integer')
     ids=values['resources']['gpu_ids']
     if not isinstance(ids,list) or len(ids)>2 or len(set(ids))!=len(ids) or any(type(i) is not int or i<0 for i in ids):
         raise ValueError('gpu_ids must contain at most two distinct container GPU indices')

@@ -3,7 +3,7 @@ set -euo pipefail
 # Execute on the SSH server host. Docker tests/training still run inside the container.
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 container_name="${DATARSI_CONTAINER:-datarsi-dev}"
-image="${DATARSI_IMAGE:-datarsi-env:0.2}"
+image="${DATARSI_IMAGE:-datarsi-env:0.3}"
 cache_dir="${DATARSI_CACHE:-/home/zqj/.cache/datarsi}"
 gpu_devices="${1:-}"
 if docker container inspect "$container_name" >/dev/null 2>&1; then

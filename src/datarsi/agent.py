@@ -1,62 +1,51 @@
-import json
-import re
 from .runtime import DockerRuntime
-
-SYSTEM="""You are a coding agent in an isolated repository. Investigate the issue, edit files and run tests.
-Return exactly one JSON object per turn: {"command":"shell command"} or {"done":true}.
-Use observed repository evidence. The environment executes one command and returns its output."""
+from .opencode import RecordingGateway,configuration
 
 
-def parse_action(content):
-    content=re.sub(r'^```(?:json)?\s*|\s*```$','',content.strip())
-    action=json.loads(content)
-    if not isinstance(action,dict):
-        raise ValueError('Action must be an object')
-    if action.get('done') is True and set(action)=={'done'}:
-        return action
-    if set(action)=={'command'} and isinstance(action['command'],str) and action['command'].strip():
-        return action
-    raise ValueError('Expected command or done action')
-
-
-def run_task(task,client,config,checkpoint,round_index,prefix=None,private_instruction=None,runtime_factory=DockerRuntime):
+def run_task(task,client,config,checkpoint,round_index,prefix=None,private_instruction=None,
+             runtime_factory=DockerRuntime,prefix_patch=None):
     record={'task_id':task.task_id,'split':task.split,'model_checkpoint':checkpoint,'round':round_index,
-        'messages':[{'role':'system','content':SYSTEM},{'role':'user','content':task.problem}],
-        'actions':[],'observations':[],'resolved':False,'environment_error':None,'failure_kind':None,
+        'agent_backend':'opencode','messages':[],'model_calls':[],'actions':[],'observations':[],
+        'resolved':False,'environment_error':None,'failure_kind':None,
         'usage':{'prompt_tokens':0,'completion_tokens':0},'patch':''}
     options=config['agent']
     steps=config['experience']['repair_max_steps'] if private_instruction else options['max_steps']
     try:
         with runtime_factory(task,config) as runtime:
-            # Re-execute commands to restore the Student state; never reuse old observations.
-            for action in prefix or []:
-                if 'command' not in action:
-                    continue
-                result=runtime.execute(action['command'],limit=options['max_observation_chars'])
-                observation=f'exit_code={result.exit_code}\n{result.output}'
-                record['messages'].extend([{'role':'assistant','content':json.dumps(action),'supervise':False}, {'role':'user','content':observation}])
-                record['actions'].append(action)
-                record['observations'].append({'exit_code':result.exit_code,'output':result.output,'seconds':result.seconds})
-            for _ in range(steps):
-                request=[{'role':message['role'],'content':message['content']} for message in record['messages']]
-                if private_instruction:
-                    request[0]['content']+='\nPRIVATE TEACHER GUIDANCE (not part of training context):\n'+private_instruction
-                reply=client.complete(request,max_tokens=options['max_new_tokens'],temperature=options['temperature'])
-                for key in record['usage']:
-                    record['usage'][key]+=reply.usage.get(key,0) or 0
-                try:
-                    action=parse_action(reply.content)
-                except (ValueError,TypeError):
-                    record['failure_kind']='format'
-                    break
-                record['messages'].append({'role':'assistant','content':json.dumps(action)})
-                if action.get('done'):
-                    break
-                result=runtime.execute(action['command'],limit=options['max_observation_chars'])
-                record['actions'].append(action)
-                record['observations'].append({'exit_code':result.exit_code,'output':result.output,'seconds':result.seconds})
-                record['messages'].append({'role':'user','content':f'exit_code={result.exit_code}\n{result.output}'})
+            if prefix_patch:
+                runtime.apply_patch(prefix_patch)
             else:
+                for action in prefix or []:
+                    if 'command' in action:
+                        runtime.execute(action['command'],limit=options['max_observation_chars'])
+            with RecordingGateway(client,config,private_instruction) as gateway:
+                prompt=task.problem
+                if private_instruction:
+                    prompt+='\nPRIVATE TEACHER GUIDANCE:\n'+private_instruction
+                result=runtime.run_opencode(configuration(config,client.model,gateway.url,steps),prompt,gateway.token)
+                record['model_calls']=gateway.calls
+                if gateway.errors:
+                    raise RuntimeError('Model gateway errors: '+','.join(gateway.errors))
+            record['opencode']=result
+            if result['exit_code']!=0:
+                raise RuntimeError(f"OpenCode exited with {result['exit_code']}: {result['stderr'][-2000:]}")
+            events=result['events']
+            if any(event.get('type')=='error' for event in events):
+                raise RuntimeError('OpenCode emitted an error event')
+            for event in events:
+                part=event.get('part',{})
+                if event.get('type')=='tool_use':
+                    state=part.get('state',{})
+                    record['actions'].append({'tool':part.get('tool'),'input':state.get('input',{})})
+                    record['observations'].append({'output':state.get('output',''),'status':state.get('status')})
+                if event.get('type')=='step_finish':
+                    tokens=part.get('tokens',{})
+                    record['usage']['prompt_tokens']+=tokens.get('input',0)+tokens.get('cache',{}).get('read',0)
+                    record['usage']['completion_tokens']+=tokens.get('output',0)
+            if not record['model_calls']:
+                raise RuntimeError('OpenCode produced no recorded model calls')
+            record['messages']=record['model_calls'][-1]['messages']
+            if len(record['model_calls'])>=steps:
                 record['failure_kind']='budget'
             record['patch']=runtime.patch()
             record['verification']=runtime.verify()

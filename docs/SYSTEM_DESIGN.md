@@ -1,4 +1,4 @@
-# datarsi 系统设计 v0.1
+# datarsi 系统设计 v0.3
 
 ## 目标与边界
 
@@ -13,7 +13,7 @@
 | configuration / state | 合并 YAML、验证配置、锁定运行目录、原子保存阶段状态 | resolved-config.yaml、state.json |
 | training / data | 精确 loss mask、保留 labels 的 padding、Trainer 全量 SFT | checkpoint、training-metrics.json |
 | inference | 托管 vLLM 子进程、检查就绪和模型身份、关闭自己的进程组 | 服务日志、统一模型接口 |
-| agent / runtime | 仓库任务隔离、受预算约束的工具循环、执行验证 | 轨迹、patch、verification |
+| agent / runtime | OpenCode 后台进程、仓库任务隔离、原生工具调用、执行验证 | 轨迹、patch、verification |
 | experience | 失败分类、Student-aware 修复策略、教师补全、重放验证 | 合格轨迹、下一轮训练数据 |
 | tracking | W&B 与本地指标、配置及数据 manifest | 每轮指标和数据 lineage |
 
@@ -26,13 +26,13 @@
 验证成功轨迹 + 回放数据 -> prepare -> 下一轮 SFT M_(t+1)
 ```
 
-模型服务与训练交替占用 GPU，不并发放置所有模型。教师可与 Student 共用模型权重、独立使用私有答案上下文，也可配置不同教师 checkpoint。教师私有 gold patch 不写入公开训练 messages；公开动作的工具观测必须来自真实执行。修复时重放的失败前缀仅作为上下文，assistant 动作使用 supervise=false，不把失败动作重新当作监督目标。仅有最终测试通过不等于完全消除了间接答案依赖。
+模型服务与训练交替占用 GPU，不并发放置所有模型。教师可与 Student 共用模型权重、独立使用私有答案上下文，也可配置不同教师 checkpoint。教师私有 gold patch 不写入公开训练 messages；公开动作的工具观测必须来自真实执行。修复时优先恢复 Student 实际 patch；旧格式轨迹可重放 Bash 前缀。每次模型调用的历史 assistant 输出设为 supervise=false，不重复监督失败或已生成动作。仅有最终测试通过不等于完全消除了间接答案依赖。
 
 ## 数据契约
 
 任务 JSONL 必须包含 task_id、split、problem、image、repo_dir、verify_command；可选 base_commit、gold_patch、test_patch。任务镜像不包含宿主机项目挂载，不开放 GPU。Agent 只接收 problem 和实际工具观测；gold_patch 仅在训练集修复时提供给教师。test_patch 仅在 Agent 完成后应用用于验证。
 
-轨迹保存 messages、actions、observations、patch、模型版本、轮次、usage 和验证状态。任务环境异常与解决失败分开统计。跨 split 的重复 task_id 被拒绝。
+轨迹保存 OpenCode JSON events、model_calls（真实请求 messages、tools 与响应）、actions、observations、patch、模型版本、轮次、usage 和验证状态。任务环境异常与解决失败分开统计。跨 split 的重复 task_id 被拒绝。
 
 SFT 输入保留原始 messages，并按 chat template 与 tokenizer offsets 定位 assistant 内容；系统、用户、tool 和 think 不计算 loss。无法可靠定位时拒绝数据，不退回全 token loss。预分词数据 labels 使用 -100，padding 不覆盖原有 mask，超长轨迹不静默截断。
 
@@ -54,3 +54,9 @@ W&B 记录训练 loss、轮次、任务通过率、环境错误、token 和时�
 2. CPU：微型模型全量 SFT、checkpoint 保存恢复、W&B 离线记录。
 3. 指定两张卡后：Qwen tokenizer、vLLM、双卡分片训练、显存和吞吐。
 4. 少量真实仓库任务，再扩大实验与消融。
+
+## OpenCode 生命周期与网络
+
+固定 OpenCode 1.19.0；Python 通过 Docker API detached exec 执行 Bash 后台命令。超时在容器内用 timeout 约束，Python 另外检查截止时间，退出时移除自己创建的任务容器及所有子进程。任务没有宿主机项目、Docker socket 或 GPU挂载；网络共享开发容器命名空间以访问 localhost vLLM，并非网络隔离。配置目录与session 数据存放任务容器 /tmp，结束即清理。
+
+每个任务启动短期本地模型网关，校验随机凭据，仅转发模型请求，保存无密钥的真实推理上下文。SFT 使用请求工具 schema 渲染 chat template，监督本轮 assistant 文本和完整 tool_call 区域；非文本内容及不可靠掩码直接报错。OpenCode 的工具协议取代原先单个 JSON command/done 协议。

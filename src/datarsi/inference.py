@@ -71,7 +71,8 @@ class VLLMService:
             '--served-model-name',self.model,'--host',options['host'],'--port',str(options['port']),
             '--tensor-parallel-size',str(options['tensor_parallel_size']),
             '--max-model-len',str(options['max_model_len']),
-            '--gpu-memory-utilization',str(options['gpu_memory_utilization']),*options['extra_args']]
+            '--gpu-memory-utilization',str(options['gpu_memory_utilization']),
+            '--enable-auto-tool-choice','--tool-call-parser',options['tool_call_parser'],*options['extra_args']]
 
     def __enter__(self):
         options=self.config['inference']

@@ -9,3 +9,13 @@ tracking:
   mode: offline
   entity: null
   tags: [student-aware, coding-agent]
+agent:
+  backend: opencode
+  opencode_binary: /opt/opencode/bin/opencode
+  task_timeout: 1800
+  max_steps: 30
+runtime:
+  opencode_network_container: datarsi-dev
+  network_disabled: false
+inference:
+  tool_call_parser: qwen3_coder

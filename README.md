@@ -4,7 +4,7 @@ Student-aware experience learning for coding agents. 主入口是 `main.py`，�
 
 ## 当前实现
 
-配置继承/覆盖、阶段状态与恢复、Transformers 全量 SFT、自动管理 vLLM、Docker 仓库执行、失败分类与答案辅助修复、W&B 跟踪。修复控制器当前为启发式策略；不是已经验证的策略进化算法。
+配置继承/覆盖、阶段状态与恢复、Transformers 全量 SFT、自动管理 vLLM、OpenCode Agent 与 Docker 仓库执行、失败分类与答案辅助修复、W&B 跟踪。修复控制器当前为启发式策略；不是已经验证的策略进化算法。
 
 系统设计与验证边界见 [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md)。
 
@@ -43,6 +43,20 @@ python main.py --config config/qwen9.yaml --set resources.gpu_ids='[0,1]' --resu
 
 `--stage` 支持 `prepare/train/rollout/repair/evaluate/pipeline`。CPU smoke 是两步随机微型模型训练，不代表真实 Qwen/vLLM 测试。
 
+## OpenCode Agent
+
+Agent 已替换为固定版本 OpenCode 1.19.0。Python 通过 Docker detached exec 执行 Bash，后台启动 `opencode run --pure --format json --agent datarsi`，轮询完成状态，保存 JSON 事件并执行任务验证。无需手动打开 TUI 或启动 OpenCode 服务。
+
+配置项：`agent.backend: opencode`、`agent.opencode_binary`、`agent.max_steps`、`agent.task_timeout`；vLLM 自动开启 tool choice，`inference.tool_call_parser` 默认为 `qwen3_coder`，不同模型需要匹配解析器。
+
+OpenCode 二进制复制到每个任务容器；任务镜像需要兼容 Linux x86_64 glibc、Bash、timeout 和 git。任务容器不挂载宿主机目录或 Docker socket，不提供 GPU。为访问绑定于 localhost 的 vLLM，它共享 `runtime.opencode_network_container`（默认 `datarsi-dev`）的网络命名空间，因此不再是无网络容器。修改开发容器名称时必须同步该配置；当前不支持网络完全禁用。
+
+每个任务使用独立的 OpenCode 配置、数据目录和短期网关凭据；启用的模型供应商只有本轮 vLLM。关闭项目配置、插件、分享、辅助标题生成、子 Agent 和网页工具；允许任务容器内的 Bash、读取和编辑。源码中的 AGENTS.md 仍可能作为仓库说明被 OpenCode读取。
+
+本地网关记录真实模型请求、工具 schema 和响应，生成 `model_calls`；SFT 按每次调用生成一个样本，只监督本次响应，包括原生工具调用。此前 assistant 输出仅作为上下文。Teacher 私有指导从保存的请求中剔除；失败修复优先恢复 Student 的实际 patch，然后由 OpenCode继续执行。该设计仍不证明生成动作没有间接答案依赖。
+
+官方 CLI 文档：https://opencode.ai/docs/cli/
+
 ## 数据与实验
 
 默认训练输入为 `data/bootstrap.jsonl`（已验证的训练 messages 轨迹），或配置 `data.train_file` 为预分词 JSONL。预分词记录需要 `input_ids/attention_mask/labels`，labels=-100 表示不监督。环境与 think 在输入上下文中保留，但不计算 loss。Mask 无法可靠定位或轨迹过长时直接报错。
@@ -67,7 +81,7 @@ python main.py --config config/qwen9.yaml --set resources.gpu_ids='[0,1]' --resu
 
 ## 环境复现与 GPU
 
-Dockerfile 固定基础镜像摘要和直接依赖；`environment/` 保存版本快照。服务器的开发环境镜像为 `datarsi-env:0.2`。
+Dockerfile 固定基础镜像摘要和直接依赖；`environment/` 保存版本快照。服务器的开发环境镜像为 `datarsi-env:0.3`。
 
 创建脚本 `scripts/container.sh` 默认不分配 GPU；传入 `0,1` 等宿主机卡编号/UUID 可创建限制设备的容器。已有容器应先保留环境镜像和项目产物，再显式重建。YAML 的 gpu_ids 为容器内逻辑编号，与宿主机编号不同。
 

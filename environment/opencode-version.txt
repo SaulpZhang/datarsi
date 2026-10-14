@@ -1,0 +1,3 @@
+OpenCode 1.19.0
+Artifact: opencode-linux-x64-baseline.tar.gz
+SHA256: 6334d70db3990721ea454357e9cf2573c8685524ad7769af9d52cbffb7008438

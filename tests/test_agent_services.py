@@ -3,7 +3,7 @@ import io
 import json
 import sys
 import pytest
-from datarsi.agent import parse_action,run_task
+from datarsi.agent import run_task
 from datarsi.configuration import Config,DEFAULTS
 from datarsi.experience import repair
 from datarsi.inference import Reply,VLLMService
@@ -35,23 +35,6 @@ class FakeClient:
 
 def task(split='train'):
     return Task('task-1',split,'fix bug','task-image','/testbed','pytest',gold_patch='PRIVATE_GOLD_PATCH')
-
-
-def test_json_actions():
-    assert parse_action('```json\n{"command":"ls"}\n```')=={'command':'ls'}
-    with pytest.raises(ValueError): parse_action('{"done":true,"command":"ls"}')
-    with pytest.raises(ValueError): parse_action('{"command":""}')
-
-
-def test_repair_replays_state_without_storing_private_prompt(tmp_path):
-    cfg=Config(deepcopy(DEFAULTS),tmp_path)
-    client=FakeClient()
-    failed={'actions':[{'command':'ls'}],'failure_kind':'verification'}
-    row=repair(task(),failed,client,cfg,'checkpoint',1,runtime_factory=FakeRuntime)
-    assert row['resolved']
-    assert 'PRIVATE_GOLD_PATCH' in json.dumps(client.requests)
-    assert 'PRIVATE_GOLD_PATCH' not in json.dumps(row)
-    assert row['messages'][3]['content'].endswith('real observation')
 
 
 def test_dev_repair_and_split_overlap_rejected(tmp_path):

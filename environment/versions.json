@@ -14,5 +14,6 @@
   },
   "gpu_assignment": null,
   "dependency_check": "passed",
-  "validation_report": "docs/VALIDATION.md"
+  "validation_report": "docs/VALIDATION.md",
+  "opencode": "1.19.0"
 }

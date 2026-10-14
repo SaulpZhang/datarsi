@@ -1,14 +1,28 @@
 from copy import deepcopy
 import re
+import json
 import uuid
 from .storage import read_jsonl,write_jsonl
 
 
-def encode_messages(tokenizer,messages,max_length,mask_thinking=True):
+def encode_messages(tokenizer,messages,max_length,mask_thinking=True,tools=None):
+    messages=deepcopy(messages)
+    for message in messages:
+        content=message.get('content')
+        if isinstance(content,list):
+            if any(part.get('type')!='text' for part in content):
+                raise ValueError('Only text OpenCode messages are supported for SFT')
+            message['content']=''.join(part['text'] for part in content)
+        elif content is None:
+            message['content']=''
+        for call in message.get('tool_calls',[]):
+            arguments=call['function']['arguments']
+            if isinstance(arguments,str):
+                call['function']['arguments']=json.loads(arguments)
     if not tokenizer.is_fast:
         raise ValueError('A fast tokenizer with offsets is required')
     def render(value):
-        return tokenizer.apply_chat_template(value,tokenize=False,add_generation_prompt=False,enable_thinking=False)
+        return tokenizer.apply_chat_template(value,tokenize=False,add_generation_prompt=False,enable_thinking=False,tools=tools or None)
     full=render(messages)
     spans=[]
     def locate(probe,marker,optional=False):
@@ -26,7 +40,20 @@ def encode_messages(tokenizer,messages,max_length,mask_thinking=True):
     for index,message in enumerate(messages):
         if message['role']!='assistant' or message.get('supervise') is False:
             continue
-        content=message.get('content')
+        if message.get('tool_calls'):
+            # Compare against the same assistant turn without calls to find the complete
+            # rendered tool span (name, argument syntax and closing delimiters).
+            probe=deepcopy(messages)
+            probe[index]['tool_calls']=[]
+            baseline=render(probe)
+            left=0
+            while left<min(len(full),len(baseline)) and full[left]==baseline[left]: left+=1
+            right=0
+            while right<min(len(full)-left,len(baseline)-left) and full[-right-1]==baseline[-right-1]: right+=1
+            if baseline[left:len(baseline)-right if right else len(baseline)].strip():
+                raise ValueError('Template changed context when removing tool calls')
+            spans.append((left,len(full)-right))
+        content=message.get('content') or ''
         if not isinstance(content,str):
             raise ValueError('Training assistant content must be a string')
         if content.count('<think>')!=content.count('</think>'):
@@ -45,7 +72,8 @@ def encode_messages(tokenizer,messages,max_length,mask_thinking=True):
             probe[index]['content']=content[:thinking[0].end()]+marker
         else:
             probe[index]['content']=marker
-        locate(probe,marker)
+        if content:
+            locate(probe,marker)
         if not mask_thinking:
             probe=deepcopy(messages)
             if thinking:
@@ -106,7 +134,11 @@ def prepare(config,source,target,tokenizer=None):
             if tokenizer is None:
                 from transformers import AutoTokenizer
                 tokenizer=AutoTokenizer.from_pretrained(config['model']['name_or_path'],use_fast=True)
-            records.append(encode_messages(tokenizer,row['messages'],config['data']['max_length'],config['data']['mask_thinking']))
+            calls=row.get('model_calls') or [{'messages':row['messages'],'tools':row.get('tools')}]
+            for call in calls:
+                records.append(encode_messages(tokenizer,call['messages'],config['data']['max_length'],
+                    config['data']['mask_thinking'],tools=call.get('tools')))
+                if len(records)>=config['data']['max_train_examples']: break
         if len(records)>=config['data']['max_train_examples']:
             break
     if not records:

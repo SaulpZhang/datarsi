@@ -2,17 +2,18 @@
 
 ## Passed in the SSH server Docker container
 
-- Rebuilt pinned Dockerfile as `datarsi-env:0.2`; recreated `datarsi-dev` from that image.
+- Rebuilt pinned Dockerfile as `datarsi-env:0.3`; the existing development container also has the same OpenCode binary installed.
 - Dependency integrity: `python -m pip check` reported no broken requirements.
-- Full opt-in suite: **25 passed** with Docker and real-tokenizer checks enabled.
+- Full opt-in suite: **26 passed** with Docker and real-tokenizer checks enabled.
 - Config YAML inheritance, dotted overrides, malformed config rejection and two-GPU limit.
 - State failure/retry, completed-stage reuse, artifact absence, config/data fingerprints and exclusive run lock.
 - Assistant loss mask excludes user/tool observations, think and failed-prefix actions; collator preserves labels and masks padding.
+- OpenCode gateway captures native tool schemas and request/response pairs; privileged guidance is excluded from stored requests. Native tool-call spans receive loss, historical assistant responses do not.
 - Actual `Qwen/Qwen3.5-9B` tokenizer: environment and private reasoning excluded, failed prefix context-only; 6 supervised tokens out of 59 in the regression example. Tokenizer files only, no language-model weights loaded.
 - Tiny random GPT-2 CPU full SFT: two steps, finite loss, checkpoint save and reload.
 - `main.py --config cpu_smoke.yaml --stage train --set experiment.name=cpu-smoke-verified`, followed by `--resume`, completed. Resume reused completed stages.
 - W&B offline pipeline and training records generated under `runs/cpu-smoke-verified/wandb/`.
-- Real Docker task fixture: initialize repository, model-interface action edits a file, execute verification, extract patch and remove task container. The action provider is a fixture, not a real LLM.
+- Real Docker task fixture: initialize repository, real OpenCode 1.19.0 uses a mock OpenAI-compatible model to call its Bash tool and edit a file, execute verification, extract patch and remove task container. OpenCode is real; the model is a fixture, not a real LLM. Also verified a stuck background child times out and its container is removed.
 - Simulated service readiness verifies served-model identity and cleans up only owned process groups; timeout cleanup tested.
 - Failed task infrastructure is retried on resume and does not silently produce an all-invalid evaluation.
 

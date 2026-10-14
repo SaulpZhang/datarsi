@@ -1,5 +1,11 @@
 from dataclasses import dataclass
 import base64
+import io
+import json
+import os
+from pathlib import Path
+import shlex
+import tarfile
 import time
 
 
@@ -31,7 +37,7 @@ class DockerRuntime:
                 self.client.images.pull(self.task.image)
             self.container=self.client.containers.run(self.task.image,detach=True,entrypoint='/bin/bash',
                 command=['-lc','sleep infinity'],working_dir=self.task.repo_dir,init=True,runtime='runc',
-                network_disabled=options['network_disabled'],mem_limit=options['memory_limit'],
+                network_mode='container:'+options['opencode_network_container'],mem_limit=options['memory_limit'],
                 nano_cpus=int(options['cpus']*1e9),labels={'datarsi.managed':'task'},
                 environment={'NVIDIA_VISIBLE_DEVICES':'void','CUDA_VISIBLE_DEVICES':'-1'})
             if self.task.base_commit:
@@ -53,6 +59,53 @@ class DockerRuntime:
         if limit is not None and len(output)>limit:
             output=output[:limit//2]+'\n[output truncated]\n'+output[-limit//2:]
         return Execution(result.exit_code,output,time.monotonic()-start)
+
+    def put_file(self,path,data,mode=0o600):
+        stream=io.BytesIO()
+        with tarfile.open(fileobj=stream,mode='w') as archive:
+            entry=tarfile.TarInfo(path.rsplit('/',1)[-1])
+            entry.size=len(data)
+            entry.mode=mode
+            archive.addfile(entry,io.BytesIO(data))
+        if not self.container.put_archive(path.rsplit('/',1)[0],stream.getvalue()):
+            raise RuntimeError('Cannot copy file into task container')
+
+    def run_opencode(self,settings,prompt,token):
+        binary=Path(self.config['agent']['opencode_binary'])
+        self.put_file('/tmp/datarsi-opencode',binary.read_bytes(),0o755)
+        self.put_file('/tmp/datarsi-opencode.json',json.dumps(settings).encode())
+        self.put_file('/tmp/datarsi-prompt',prompt.encode())
+        # No shell interpolation of prompts/credentials. This owned exec launches in the
+        # background; deleting its task container also kills every descendant on timeout.
+        argv=['timeout','--signal=TERM','--kill-after=10s',str(self.config['agent']['task_timeout']),
+            '/tmp/datarsi-opencode','run','--pure','--format','json','--agent','datarsi',
+            '--model',settings['model']]
+        command=' '.join(shlex.quote(item) for item in argv)+' "$(cat /tmp/datarsi-prompt)"'
+        script=command+' > /tmp/datarsi-events.jsonl 2> /tmp/datarsi-stderr & child=$!; wait "$child"'
+        environment={'DATARSI_GATEWAY_KEY':token,'OPENCODE_CONFIG':'/tmp/datarsi-opencode.json',
+            'OPENCODE_DISABLE_PROJECT_CONFIG':'true','OPENCODE_DISABLE_AUTOUPDATE':'true',
+            'OPENCODE_DISABLE_MODELS_FETCH':'true','OPENCODE_DISABLE_LSP_DOWNLOAD':'true',
+            'XDG_CONFIG_HOME':'/tmp/datarsi-config','XDG_DATA_HOME':'/tmp/datarsi-data',
+            'XDG_CACHE_HOME':'/tmp/datarsi-cache','HOME':'/tmp/datarsi-home'}
+        # Docker's detached exec is the background process interface; no host shell or
+        # Docker socket is given to OpenCode itself.
+        job=self.client.api.exec_create(self.container.id,['bash','-lc',script],
+            workdir=self.task.repo_dir,environment=environment)
+        self.client.api.exec_start(job['Id'],detach=True)
+        deadline=time.monotonic()+self.config['agent']['task_timeout']+15
+        while True:
+            status=self.client.api.exec_inspect(job['Id'])
+            if not status['Running']:
+                break
+            if time.monotonic()>deadline:
+                raise TimeoutError('OpenCode task exceeded timeout')
+            time.sleep(0.2)
+        events=[]
+        output=self.execute('cat /tmp/datarsi-events.jsonl').output
+        for line in output.splitlines():
+            if line.strip(): events.append(json.loads(line))
+        stderr=self.execute('cat /tmp/datarsi-stderr',limit=8000).output
+        return {'exit_code':status['ExitCode'],'events':events,'stderr':stderr}
 
     def patch(self):
         result=self.execute('git add -N . && git diff --binary HEAD')
