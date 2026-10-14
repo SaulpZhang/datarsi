@@ -1,0 +1,11 @@
+experiment:
+  name: development
+  rounds: 3
+  seed: 42
+resources:
+  gpu_ids: []
+tracking:
+  project: datarsi
+  mode: offline
+  entity: null
+  tags: [student-aware, coding-agent]

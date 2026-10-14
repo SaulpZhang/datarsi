@@ -1,0 +1,15 @@
+# Editable install with no version control (datarsi==0.2.0)
+-e /workspace/datarsi
+datasets==4.8.5
+docker==7.2.0
+fsspec==2026.2.0
+gitdb==4.0.12
+GitPython==3.2.1
+multiprocess==0.70.19
+pandas==3.0.6
+platformdirs==4.13.0
+pyarrow==26.0.0
+pycairo==1.29.2
+smmap==5.0.3
+wandb==0.22.3
+xxhash==4.0.1

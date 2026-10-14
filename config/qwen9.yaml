@@ -1,0 +1,24 @@
+extends: base.yaml
+experiment:
+  name: qwen9-experience
+model:
+  name_or_path: Qwen/Qwen3.5-9B
+  kind: image_text
+training:
+  num_processes: 2
+  trainer:
+    fsdp: true
+    fsdp_config:
+      version: 2
+      reshard_after_forward: true
+      cpu_offload: false
+      auto_wrap_policy: TRANSFORMER_BASED_WRAP
+      transformer_layer_cls_to_wrap: [Qwen3_5DecoderLayer]
+      state_dict_type: FULL_STATE_DICT
+      cpu_ram_efficient_loading: true
+      activation_checkpointing: true
+    gradient_checkpointing: false
+inference:
+  tensor_parallel_size: 2
+  port: 18080
+  base_url: http://127.0.0.1:18080/v1

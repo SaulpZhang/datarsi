@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datarsi"
+version = "0.2.0"
+description = "Student-aware experience learning for coding agents"
+requires-python = ">=3.12,<3.13"
+dependencies = ["transformers==5.12.0", "datasets==4.8.5", "accelerate==1.14.0", "PyYAML==6.0.3", "wandb==0.22.3", "docker==7.2.0", "openai==2.41.1"]
+
+[project.scripts]
+datarsi = "datarsi.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
